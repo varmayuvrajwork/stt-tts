@@ -1,51 +1,76 @@
-let isRunning = false;
+let mediaRecorder;
+let audioChunks = [];
 
-function start() {
-      if (isRunning) return;
-      isRunning = true;
-      runTranslationLoop();
-}
+// Start mic recording
+async function startRecording() {
+      try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
 
-function stop() {
-      isRunning = false;
-      alert("Stopped listening.");
-}
+            audioChunks = [];
 
-function runTranslationLoop() {
-      if (!isRunning) return;
-
-      const source = document.getElementById("sourceLang").value;
-      const target = document.getElementById("targetLang").value;
-
-      fetch('/translate', {
-            method: 'POST',
-            headers: {
-                  'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ sourceLang: source, targetLang: target })
-      })
-            .then(response => {
-                  if (!response.ok) throw new Error("Server error");
-                  return response.json();
-            })
-            .then(data => {
-                  const chat = document.getElementById("chatbox");
-
-                  if (data.original) {
-                  chat.innerHTML += `<p><b>You (${source}):</b> ${data.original}</p>`;
-                  chat.innerHTML += `<p><b>Translated to ${target}:</b> ${data.translated_query}</p>`;
-                  chat.innerHTML += `<p><b>Agent Response (${target}):</b> ${data.agent_response}</p>`;
-                  chat.innerHTML += `<p><b>Back to ${source}:</b> ${data.translated_response}</p>`;
-                  } else {
-                  chat.innerHTML += `<p><i>(No voice detected, retrying...)</i></p>`;
+            mediaRecorder.ondataavailable = event => {
+                  if (event.data.size > 0) {
+                  audioChunks.push(event.data);
                   }
+            };
 
-                  chat.scrollTop = chat.scrollHeight;
+            mediaRecorder.onstop = async () => {
+                  const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                  const audioFile = new File([audioBlob], "voice.webm");
 
-                  if (isRunning) runTranslationLoop();
-            })
-            .catch(err => {
-                  console.error("Error during loop:", err);
-                  stop();
-            });
+                  const formData = new FormData();
+                  formData.append("file", audioFile);
+                  formData.append("sourceLang", document.getElementById("sourceLang").value);
+                  formData.append("targetLang", document.getElementById("targetLang").value);
+
+                  try {
+                  const response = await fetch("/translate", {
+                        method: "POST",
+                        body: formData
+                  });
+
+                  const data = await response.json();
+                  displayResponse(data);
+                  } catch (err) {
+                  console.error("Translation error:", err);
+                  }
+            };
+
+            mediaRecorder.start();
+            document.getElementById("status").innerText = "🎤 Recording...";
+      } catch (error) {
+            alert("Microphone access denied or not available.");
+            console.error(error);
       }
+}
+
+// Stop mic recording
+function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+            mediaRecorder.stop();
+            document.getElementById("status").innerText = "⏳ Processing...";
+      }
+}
+
+// Display chat UI with translation result
+function displayResponse(data) {
+      const chat = document.getElementById("chatbox");
+      chat.innerHTML += `<p><strong>You:</strong> ${data.original}</p>`;
+      chat.innerHTML += `<p><strong>Translated:</strong> ${data.translated_query}</p>`;
+      chat.innerHTML += `<p><strong>Agent Response:</strong> ${data.agent_response}</p>`;
+      chat.innerHTML += `<p><strong>Back to Source:</strong> ${data.translated_response}</p>`;
+      chat.scrollTop = chat.scrollHeight;
+
+      document.getElementById("status").innerText = "✅ Done!";
+}
+
+// Optional: swap source and target languages
+function swapLanguages() {
+      const source = document.getElementById("sourceLang");
+      const target = document.getElementById("targetLang");
+
+      const temp = source.value;
+      source.value = target.value;
+      target.value = temp;
+}
