@@ -4,3 +4,4 @@ jinja2
 azure-cognitiveservices-speech
 openai
 langgraph
+dotenv
