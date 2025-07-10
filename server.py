@@ -1,21 +1,39 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
 import azure.cognitiveservices.speech as speechsdk
 from openai import AzureOpenAI
 import os
 import time
-from dotenv import load_dotenv
-load_dotenv()
-from graph import wf  # LangGraph workflow
+import json
+import asyncio
+import httpx
 
+from graph import wf  # LangGraph workflow
+from dotenv import load_dotenv
+# Load environment variables
+load_dotenv()
+
+# Initialize FastAPI
 app = FastAPI()
 
+# Mount static and template files
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
-# Azure keys
+# CORS for ngrok/web clients
+app.add_middleware(
+      CORSMiddleware,
+      allow_origins=["*"],
+      allow_credentials=True,
+      allow_methods=["*"],
+      allow_headers=["*"],
+)
+
+# Azure and OpenAI configuration
 AZURE_SPEECH_KEY = os.environ["AZURE_SPEECH_KEY"]
 AZURE_REGION = os.environ["AZURE_REGION"]
 AZURE_OPENAI_KEY = os.environ["AZURE_OPENAI_KEY"]
@@ -28,6 +46,7 @@ openai_client = AzureOpenAI(
       azure_endpoint=AZURE_OPENAI_ENDPOINT
 )
 
+# Language maps for translation prompts
 lang_map = {
       "en": "English",
       "hi": "Hindi",
@@ -36,28 +55,26 @@ lang_map = {
       "zh": "Chinese"
 }
 
-def get_stt_lang_code(lang_code):
+def get_stt_lang_code(lang):
       return {
             "en": "en-US",
             "hi": "hi-IN",
             "ja": "ja-JP",
             "ko": "ko-KR",
             "zh": "zh-CN"
-      }.get(lang_code, "en-US")
+      }.get(lang, "en-US")
 
-def get_tts_voice(lang_code):
+def get_tts_voice(lang):
       return {
-            "en": "en-US-AriaNeural",
+            "en": "en-US-JennyNeural",
             "hi": "hi-IN-SwaraNeural",
             "ja": "ja-JP-NanamiNeural",
             "ko": "ko-KR-SunHiNeural",
             "zh": "zh-CN-XiaoxiaoNeural"
-      }.get(lang_code, "en-US-AriaNeural")
+      }.get(lang, "en-US-JennyNeural")
 
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request):
-      return templates.TemplateResponse("index.html", {"request": request})
 
+# 🔁 Core logic: Your original /translate endpoint
 @app.post("/translate")
 async def translate_voice(request: Request):
       body = await request.json()
@@ -99,8 +116,8 @@ async def translate_voice(request: Request):
 
       # Agent responds in target_lang
       agent_result = wf.invoke({
-      "query": translated_query,
-      "lang": target_lang
+            "query": translated_query,
+            "lang": target_lang
       })
       agent_response = agent_result["response"]
 
@@ -123,3 +140,39 @@ async def translate_voice(request: Request):
             "agent_response": agent_response,
             "translated_response": translated_response
       }
+
+
+# 🌐 WebSocket endpoint to support real-time interaction (non-invasive)
+@app.websocket("/ws/translate")
+async def websocket_translate(websocket: WebSocket):
+      await websocket.accept()
+      print("🌐 WebSocket connected")
+
+      try:
+            while True:
+                  text = await websocket.receive_text()
+                  data = json.loads(text)
+                  source_lang = data.get("sourceLang")
+                  target_lang = data.get("targetLang")
+
+                  # Internally call /translate
+                  async with httpx.AsyncClient() as client:
+                        response = await client.post(
+                              "http://localhost:8000/translate",
+                              json={"sourceLang": source_lang, "targetLang": target_lang},
+                              timeout=30.0
+                        )
+
+                  if response.status_code == 200:
+                        result = response.json()
+                        await websocket.send_text(json.dumps(result))
+                  else:
+                        await websocket.send_text(json.dumps({"error": "Translation failed"}))
+
+                  await asyncio.sleep(1)
+
+      except WebSocketDisconnect:
+            print("🔌 WebSocket disconnected")
+      except Exception as e:
+            print("⚠️ WebSocket error:", str(e))
+            await websocket.send_text(json.dumps({"error": "Internal server error"}))
