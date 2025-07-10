@@ -59,7 +59,8 @@ function startWebSocket() {
       const source = document.getElementById("sourceLang").value;
       const target = document.getElementById("targetLang").value;
 
-      ws = new WebSocket("wss://" + window.location.host + "/ws/translate");
+      const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+      ws = new WebSocket(`${protocol}://${window.location.host}/ws/translate`);
 
       ws.onopen = () => {
             console.log("WebSocket connected");
